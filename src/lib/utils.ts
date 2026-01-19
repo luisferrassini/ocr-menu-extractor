@@ -4,7 +4,6 @@ import type {
   SavedMenuVersion,
   MenuCategory,
   PricingRuleType,
-  ParsedSelection,
   AppliedCombo,
 } from "./types";
 
@@ -82,8 +81,31 @@ export function correctOCRText(text: string): string {
     .replace(/\blowcarb\b/gi, "lowcarb");
 }
 
+// Types for API response
+type APIMenuItem = {
+  id?: string;
+  name?: string;
+  category?: string;
+  description?: string;
+  images?: string[];
+};
+
+type APIPricingRule = {
+  id?: string;
+  category?: string;
+  type?: string;
+  price?: number | string;
+  quantity?: number | string;
+  mixQuantities?: Array<{ category: string; quantity: number }>;
+};
+
+type APIMenuData = {
+  items?: APIMenuItem[];
+  pricingRules?: APIPricingRule[];
+};
+
 // Parse structured menu from API response
-export function parseStructuredMenu(data: any): {
+export function parseStructuredMenu(data: APIMenuData): {
   items: MenuItem[];
   pricingRules: PricingRule[];
 } {
@@ -91,7 +113,7 @@ export function parseStructuredMenu(data: any): {
     return { items: [], pricingRules: [] };
   }
 
-  const items: MenuItem[] = data.items.map((item: any) => ({
+  const items: MenuItem[] = data.items.map((item: APIMenuItem) => ({
     id: item.id || `item-${Math.random().toString(36).substr(2, 9)}`,
     name: item.name || "",
     category: (item.category || "FIT") as MenuCategory,
@@ -99,13 +121,16 @@ export function parseStructuredMenu(data: any): {
     images: item.images || [],
   }));
 
-  const pricingRules: PricingRule[] = data.pricingRules.map((rule: any) => ({
+  const pricingRules: PricingRule[] = data.pricingRules.map((rule: APIPricingRule) => ({
     id: rule.id || `rule-${Math.random().toString(36).substr(2, 9)}`,
     category: (rule.category || "FIT") as MenuCategory,
     type: (rule.type || "UNITARY") as PricingRuleType,
-    price: Number.parseFloat(rule.price) || 0,
-    quantity: rule.quantity ? Number.parseInt(rule.quantity, 10) : undefined,
-    mixQuantities: rule.mixQuantities || undefined,
+    price: typeof rule.price === "string" ? Number.parseFloat(rule.price) || 0 : rule.price || 0,
+    quantity: rule.quantity ? Number.parseInt(String(rule.quantity), 10) : undefined,
+    mixQuantities: rule.mixQuantities?.map((mix) => ({
+      category: mix.category as MenuCategory,
+      quantity: mix.quantity,
+    })),
   }));
 
   return { items, pricingRules };
@@ -185,16 +210,9 @@ export function calculateBestPrice(
     unitaryPrices[rule.category] = rule.price;
   });
 
-  // Calculate base price (without combos)
-  let basePrice = 0;
-  Object.entries(categoryCounts).forEach(([category, count]) => {
-    const price = unitaryPrices[category as MenuCategory];
-    basePrice += price * count;
-  });
-
   // Try to apply combos
   const appliedCombos: AppliedCombo[] = [];
-  let remainingCounts = { ...categoryCounts };
+  const remainingCounts = { ...categoryCounts };
   let totalPrice = 0;
 
   // Sort combos by savings (best first)
@@ -283,6 +301,7 @@ export function calculateBestPrice(
 
 // Storage functions for Gemini API key
 const GEMINI_API_KEY_STORAGE_KEY = "gemini-api-key";
+const GEMINI_MODEL_STORAGE_KEY = "gemini-model";
 
 export function getGeminiApiKey(): string | null {
   if (typeof window === "undefined") return null;
@@ -311,28 +330,78 @@ export function clearGeminiApiKey(): void {
   }
 }
 
-// Client-side function to process menu with Gemini API
-export async function processMenuWithAI(
-  rawText: string,
-  apiKey?: string,
-): Promise<{
-  cleanedText: string;
-  structured: boolean;
-  data?: any;
-}> {
+// AI Model configuration
+export type AIModel = {
+  id: string;
+  name: string;
+  endpoint: string;
+};
+
+export const AVAILABLE_MODELS: AIModel[] = [
+  {
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash (Recomendado)",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+  },
+  {
+    id: "gemini-2.5-flash-lite",
+    name: "Gemini 2.5 Flash-Lite (Mais rápido)",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+  },
+  {
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro (Mais inteligente)",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+  },
+  {
+    id: "gemini-2.0-flash",
+    name: "Gemini 2.0 Flash",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+  },
+  {
+    id: "gemini-2.0-flash-lite",
+    name: "Gemini 2.0 Flash-Lite",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent",
+  },
+  {
+    id: "gemini-1.5-flash",
+    name: "Gemini 1.5 Flash",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+  },
+  {
+    id: "gemini-1.5-pro",
+    name: "Gemini 1.5 Pro",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent",
+  },
+];
+
+export function getSelectedAIModel(): string {
+  if (typeof window === "undefined") return "gemini-2.5-flash-lite";
+  try {
+    return localStorage.getItem(GEMINI_MODEL_STORAGE_KEY) || "gemini-2.5-flash-lite";
+  } catch {
+    return "gemini-2.5-flash-lite";
+  }
+}
+
+export function saveSelectedAIModel(modelId: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(GEMINI_MODEL_STORAGE_KEY, modelId);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+// Generate prompt for AI processing (without sending)
+export function generateAIPrompt(rawText: string): string {
   if (!rawText || typeof rawText !== "string") {
-    throw new Error("rawText is required");
+    return "";
   }
 
-  // Try to get API key from parameter or localStorage
-  const finalApiKey = apiKey || getGeminiApiKey();
-  if (!finalApiKey) {
-    throw new Error(
-      "API key do Gemini não configurada. Por favor, configure sua API key nas configurações.",
-    );
-  }
-
-  const prompt = `Você é um assistente que processa texto cru de OCR de cardápios de restaurantes em português do Brasil.
+  const corrected = correctOCRText(rawText);
+  
+  return `Você é um assistente que processa texto cru de OCR de cardápios de restaurantes em português do Brasil.
 
 O cardápio tem uma estrutura fixa:
 - Seções como "MARMITAS FIT", "MARMITAS LOWCARB" ou "CALDOS" contêm as opções/itens do cardápio
@@ -361,12 +430,43 @@ Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem expli
 }
 
 Texto cru do OCR:
-${rawText}
+${corrected}
 
 JSON estruturado:`;
+}
+
+// Client-side function to process menu with Gemini API
+export async function processMenuWithAI(
+  rawText: string,
+  apiKey?: string,
+  modelId?: string,
+): Promise<{
+  cleanedText: string;
+  structured: boolean;
+  data?: APIMenuData;
+  prompt: string;
+}> {
+  if (!rawText || typeof rawText !== "string") {
+    throw new Error("rawText is required");
+  }
+
+  // Try to get API key from parameter or localStorage
+  const finalApiKey = apiKey || getGeminiApiKey();
+  if (!finalApiKey) {
+    throw new Error(
+      "API key do Gemini não configurada. Por favor, configure sua API key nas configurações.",
+    );
+  }
+
+  // Get model endpoint
+  const selectedModelId = modelId || getSelectedAIModel();
+  const model = AVAILABLE_MODELS.find((m) => m.id === selectedModelId) || AVAILABLE_MODELS[0];
+  const endpoint = model.endpoint;
+
+  const prompt = generateAIPrompt(rawText);
 
   const response = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    endpoint,
     {
       method: "POST",
       headers: {
@@ -389,7 +489,6 @@ JSON estruturado:`;
 
   if (!response.ok) {
     let errorMessage = "Falha ao processar com a API do Gemini";
-    const errorCode = response.status;
 
     const errorText = await response.text();
     console.error("Gemini API error:", errorText);
@@ -452,6 +551,7 @@ JSON estruturado:`;
     return {
       cleanedText: responseText || rawText,
       structured: false,
+      prompt,
     };
   }
 
@@ -459,5 +559,66 @@ JSON estruturado:`;
     cleanedText: responseText,
     structured: true,
     data: structuredData,
+    prompt,
   };
+}
+
+// Export/Import functions for menus
+export function exportMenuToJSON(menu: SavedMenuVersion): string {
+  return JSON.stringify(menu, null, 2);
+}
+
+export function exportMenuToFile(menu: SavedMenuVersion): void {
+  const json = exportMenuToJSON(menu);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${menu.name.replace(/[^a-z0-9]/gi, "_")}_${menu.id}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export function exportMenuToClipboard(menu: SavedMenuVersion): Promise<void> {
+  const json = exportMenuToJSON(menu);
+  return navigator.clipboard.writeText(json);
+}
+
+export function importMenuFromJSON(json: string): SavedMenuVersion {
+  const menu = JSON.parse(json) as SavedMenuVersion;
+  
+  // Validate structure
+  if (!menu.id || !menu.name || !menu.items || !menu.pricingRules) {
+    throw new Error("Formato de cardápio inválido");
+  }
+  
+  // Generate new ID to avoid conflicts
+  menu.id = `menu-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  menu.createdAt = new Date().toISOString();
+  
+  return menu;
+}
+
+export async function importMenuFromClipboard(): Promise<SavedMenuVersion> {
+  const text = await navigator.clipboard.readText();
+  return importMenuFromJSON(text);
+}
+
+export function importMenuFromFile(file: File): Promise<SavedMenuVersion> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const json = e.target?.result as string;
+        const menu = importMenuFromJSON(json);
+        resolve(menu);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    reader.onerror = () => reject(new Error("Erro ao ler arquivo"));
+    reader.readAsText(file);
+  });
 }

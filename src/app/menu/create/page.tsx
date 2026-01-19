@@ -21,7 +21,16 @@ import {
   processMenuWithAI,
   getGeminiApiKey,
   saveGeminiApiKey,
+  getSelectedAIModel,
+  saveSelectedAIModel,
+  AVAILABLE_MODELS,
+  exportMenuToFile,
+  exportMenuToClipboard,
+  importMenuFromClipboard,
+  importMenuFromFile,
+  generateAIPrompt,
 } from "@/lib/utils";
+import type { SavedMenuVersion } from "@/lib/types";
 
 function splitImageInHalf(file: File): Promise<[File, File]> {
   return new Promise((resolve, reject) => {
@@ -124,6 +133,13 @@ export default function MenuCreatePage() {
   const [saveMenuName, setSaveMenuName] = useState("");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [showApiKeyConfig, setShowApiKeyConfig] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState("gemini-2.5-flash-lite");
+  const [showPromptDialog, setShowPromptDialog] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
+  // Generate prompt preview when rawText changes
+  const aiPrompt = rawText.trim() ? generateAIPrompt(rawText) : null;
 
   // Load menu from URL params if editing
   useEffect(() => {
@@ -140,12 +156,14 @@ export default function MenuCreatePage() {
     }
   }, []);
 
-  // Load Gemini API key from localStorage
+  // Load Gemini API key and model from localStorage
   useEffect(() => {
     const savedKey = getGeminiApiKey();
     if (savedKey) {
       setGeminiApiKey(savedKey);
     }
+    const savedModel = getSelectedAIModel();
+    setSelectedModelId(savedModel);
   }, []);
 
   const handleFileChange = useCallback(
@@ -242,7 +260,12 @@ export default function MenuCreatePage() {
     try {
       const corrected = correctOCRText(rawText);
       const apiKey = geminiApiKey || getGeminiApiKey();
-      const result = await processMenuWithAI(corrected, apiKey || undefined);
+      const result = await processMenuWithAI(
+        corrected,
+        apiKey || undefined,
+        selectedModelId,
+      );
+      
       setRawText(result.cleanedText || corrected);
 
       if (result.structured && result.data) {
@@ -262,7 +285,7 @@ export default function MenuCreatePage() {
     } finally {
       setIsProcessingAI(false);
     }
-  }, [rawText, geminiApiKey]);
+  }, [rawText, geminiApiKey, selectedModelId]);
 
   const handleSaveApiKey = useCallback(() => {
     if (geminiApiKey.trim()) {
@@ -273,6 +296,123 @@ export default function MenuCreatePage() {
       setError("Por favor, insira uma API key válida.");
     }
   }, [geminiApiKey]);
+
+  const handleModelChange = useCallback((modelId: string) => {
+    setSelectedModelId(modelId);
+    saveSelectedAIModel(modelId);
+  }, []);
+
+  const handleExportMenu = useCallback(async (toClipboard: boolean) => {
+    if (menuItems.length === 0) {
+      setError("Não há cardápio para exportar.");
+      return;
+    }
+
+    setIsExporting(true);
+    setError(null);
+
+    try {
+      const menu: SavedMenuVersion = {
+        id: selectedMenuId || `temp-${Date.now()}`,
+        name: saveMenuName || "Cardápio sem nome",
+        createdAt: new Date().toISOString(),
+        items: menuItems,
+        pricingRules: pricingRules,
+      };
+
+      if (toClipboard) {
+        await exportMenuToClipboard(menu);
+        setError(null);
+        // Show success message briefly
+        const originalError = error;
+        setError("Cardápio copiado para a área de transferência!");
+        setTimeout(() => setError(originalError), 2000);
+      } else {
+        exportMenuToFile(menu);
+      }
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "Falha ao exportar cardápio";
+      setError(message);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [menuItems, pricingRules, selectedMenuId, saveMenuName, error]);
+
+  const handleImportMenu = useCallback(async (fromClipboard: boolean) => {
+    setIsImporting(true);
+    setError(null);
+
+    try {
+      let menu: SavedMenuVersion;
+      
+      if (fromClipboard) {
+        menu = await importMenuFromClipboard();
+      } else {
+        // File import will be handled by file input
+        setIsImporting(false);
+        return;
+      }
+
+      setMenuItems(menu.items);
+      setPricingRules(menu.pricingRules);
+      setSaveMenuName(menu.name);
+      setSelectedMenuId(null); // New menu, not updating existing
+      
+      setError(null);
+      const originalError = error;
+      setError("Cardápio importado com sucesso!");
+      setTimeout(() => setError(originalError), 2000);
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "Falha ao importar cardápio";
+      setError(message);
+    } finally {
+      setIsImporting(false);
+    }
+  }, [error]);
+
+  const handleFileImport = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    setError(null);
+
+    try {
+      const menu = await importMenuFromFile(file);
+      setMenuItems(menu.items);
+      setPricingRules(menu.pricingRules);
+      setSaveMenuName(menu.name);
+      setSelectedMenuId(null); // New menu, not updating existing
+      
+      setError(null);
+      const originalError = error;
+      setError("Cardápio importado com sucesso!");
+      setTimeout(() => setError(originalError), 2000);
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "Falha ao importar cardápio";
+      setError(message);
+    } finally {
+      setIsImporting(false);
+      // Reset file input
+      event.target.value = "";
+    }
+  }, [error]);
+
+  const handleCopyPrompt = useCallback(() => {
+    const prompt = rawText.trim() ? generateAIPrompt(rawText) : null;
+    if (prompt) {
+      navigator.clipboard.writeText(prompt).then(() => {
+        const originalError = error;
+        setError("Prompt copiado para a área de transferência!");
+        setTimeout(() => setError(originalError), 2000);
+      }).catch(() => {
+        setError("Falha ao copiar prompt.");
+      });
+    }
+  }, [rawText, error]);
 
   const handleSaveMenu = useCallback(() => {
     if (!saveMenuName.trim()) {
@@ -361,64 +501,111 @@ export default function MenuCreatePage() {
 
         {/* Menu Selector */}
         <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              Cardápio:
-            </label>
-            <select
-              value={selectedMenuId || ""}
-              onChange={(e) => {
-                if (e.target.value) {
-                  const menu = loadMenuVersion(e.target.value);
-                  if (menu) {
-                    setMenuItems(menu.items);
-                    setPricingRules(menu.pricingRules);
-                    setSelectedMenuId(e.target.value);
-                    setSaveMenuName(menu.name);
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                Cardápio:
+              </label>
+              <select
+                value={selectedMenuId || ""}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    const menu = loadMenuVersion(e.target.value);
+                    if (menu) {
+                      setMenuItems(menu.items);
+                      setPricingRules(menu.pricingRules);
+                      setSelectedMenuId(e.target.value);
+                      setSaveMenuName(menu.name);
+                    }
+                  } else {
+                    setMenuItems([]);
+                    setPricingRules([]);
+                    setSelectedMenuId(null);
+                    setSaveMenuName("");
                   }
-                } else {
-                  setMenuItems([]);
-                  setPricingRules([]);
-                  setSelectedMenuId(null);
-                  setSaveMenuName("");
-                }
-              }}
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-            >
-              <option value="">Novo cardápio</option>
-              {savedMenus.map((menu) => (
-                <option key={menu.id} value={menu.id}>
-                  {menu.name} ({new Date(menu.createdAt).toLocaleDateString("pt-BR")})
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => setIsEditMode(!isEditMode)}
-              className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                isEditMode
-                  ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
-                  : "border-zinc-300 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
-              }`}
-            >
-              {isEditMode ? "Sair da Edição" : "Editar Cardápio"}
-            </button>
-            {menuItems.length > 0 && (
+                }}
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              >
+                <option value="">Novo cardápio</option>
+                {savedMenus.map((menu) => (
+                  <option key={menu.id} value={menu.id}>
+                    {menu.name} ({new Date(menu.createdAt).toLocaleDateString("pt-BR")})
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
-                onClick={() => setShowSaveDialog(true)}
-                className="rounded-lg border border-green-500 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 transition hover:bg-green-100 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
+                onClick={() => setIsEditMode(!isEditMode)}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                  isEditMode
+                    ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                    : "border-zinc-300 bg-zinc-50 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                }`}
               >
-                Salvar Cardápio
+                {isEditMode ? "Sair da Edição" : "Editar Cardápio"}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => router.push("/")}
-              className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
-            >
-              ← Voltar
-            </button>
+              {menuItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowSaveDialog(true)}
+                  className="rounded-lg border border-green-500 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 transition hover:bg-green-100 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
+                >
+                  Salvar Cardápio
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => router.push("/")}
+                className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+              >
+                ← Voltar
+              </button>
+            </div>
+            
+            {/* Export/Import Section */}
+            <div className="flex flex-wrap items-center gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Exportar/Importar:
+              </span>
+              {menuItems.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleExportMenu(false)}
+                    disabled={isExporting}
+                    className="rounded-lg border border-blue-500 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-400 disabled:opacity-50"
+                  >
+                    {isExporting ? "Exportando..." : "📥 Exportar arquivo"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportMenu(true)}
+                    disabled={isExporting}
+                    className="rounded-lg border border-purple-500 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 transition hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-900/20 dark:text-purple-400 disabled:opacity-50"
+                  >
+                    {isExporting ? "Copiando..." : "📋 Copiar JSON"}
+                  </button>
+                </>
+              )}
+              <label className="cursor-pointer rounded-lg border border-indigo-500 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-400">
+                {isImporting ? "Importando..." : "📤 Importar arquivo"}
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleFileImport}
+                  className="hidden"
+                  disabled={isImporting}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => handleImportMenu(true)}
+                disabled={isImporting}
+                className="rounded-lg border border-indigo-500 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 transition hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-400 disabled:opacity-50"
+              >
+                {isImporting ? "Importando..." : "📋 Colar JSON"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -464,6 +651,39 @@ export default function MenuCreatePage() {
           </div>
         )}
 
+        {/* Prompt Dialog */}
+        {showPromptDialog && aiPrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="mx-4 max-h-[80vh] w-full max-w-3xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-lg dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-semibold">Prompt que será enviado para a IA</h3>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCopyPrompt}
+                    className="rounded-lg border border-purple-500 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 transition hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-900/20 dark:text-purple-400"
+                  >
+                    📋 Copiar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPromptDialog(false)}
+                    className="rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              </div>
+              <textarea
+                value={aiPrompt}
+                readOnly
+                className="h-[60vh] w-full resize-none rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-mono leading-relaxed text-zinc-800 outline-none dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+        )}
+
         <section className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div className="space-y-6">
             {/* API Key Configuration */}
@@ -482,6 +702,22 @@ export default function MenuCreatePage() {
               </div>
               {showApiKeyConfig && (
                 <div className="space-y-3">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                      Modelo de IA
+                    </label>
+                    <select
+                      value={selectedModelId}
+                      onChange={(e) => handleModelChange(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                    >
+                      {AVAILABLE_MODELS.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div>
                     <label className="mb-1.5 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
                       API Key do Gemini
@@ -521,9 +757,14 @@ export default function MenuCreatePage() {
                 </div>
               )}
               {!showApiKeyConfig && getGeminiApiKey() && (
-                <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                  ✓ API key configurada
-                </p>
+                <div className="space-y-1">
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                    ✓ API key configurada
+                  </p>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                    Modelo: {AVAILABLE_MODELS.find(m => m.id === selectedModelId)?.name || selectedModelId}
+                  </p>
+                </div>
               )}
             </div>
 
@@ -597,14 +838,26 @@ export default function MenuCreatePage() {
                   <h2 className="text-sm font-medium uppercase tracking-[0.16em] text-zinc-500">
                     Texto OCR bruto
                   </h2>
-                  <button
-                    type="button"
-                    onClick={handleProcessWithAI}
-                    disabled={isProcessingAI || !rawText.trim()}
-                    className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:bg-blue-500 dark:hover:bg-blue-600"
-                  >
-                    {isProcessingAI ? "Processando…" : "✨ Limpar com IA"}
-                  </button>
+                  <div className="flex gap-2">
+                    {aiPrompt && (
+                      <button
+                        type="button"
+                        onClick={() => setShowPromptDialog(true)}
+                        className="rounded-lg border border-purple-500 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 transition hover:bg-purple-100 dark:border-purple-800 dark:bg-purple-900/20 dark:text-purple-400"
+                        title="Ver o prompt que será enviado para a IA"
+                      >
+                        👁️ Ver Prompt
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleProcessWithAI}
+                      disabled={isProcessingAI || !rawText.trim()}
+                      className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:bg-blue-500 dark:hover:bg-blue-600"
+                    >
+                      {isProcessingAI ? "Processando…" : "✨ Processar com IA"}
+                    </button>
+                  </div>
                 </div>
                 <textarea
                   value={rawText}

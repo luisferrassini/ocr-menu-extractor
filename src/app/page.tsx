@@ -9,7 +9,9 @@ export default function Home() {
   const router = useRouter();
   const [savedMenus, setSavedMenus] = useState<SavedMenuVersion[]>([]);
 
+  // Load menus from localStorage after hydration to prevent SSR/client mismatch
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Necessary to load client-only localStorage data after hydration
     setSavedMenus(getSavedMenus());
   }, []);
 
@@ -77,7 +79,7 @@ export default function Home() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => router.push(`/menu/${menu.id}`)}
+                      onClick={() => router.push(`/menu?id=${menu.id}`)}
                       className="flex-1 rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
                     >
                       Ver
