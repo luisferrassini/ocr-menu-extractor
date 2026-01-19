@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { Suspense, useCallback, useMemo, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
   MenuItem,
@@ -21,7 +21,7 @@ import {
   updateMenuVersion,
 } from "@/lib/utils";
 
-export default function MenuPage() {
+function MenuPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [savedMenus, setSavedMenus] = useState<SavedMenuVersion[]>([]);
@@ -644,5 +644,23 @@ export default function MenuPage() {
         </section>
       </main>
     </div>
+  );
+}
+
+export default function MenuPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-zinc-50 font-sans text-zinc-900 dark:bg-black dark:text-zinc-50">
+          <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-8 px-4 py-10 sm:px-8 lg:px-12">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-zinc-700 dark:text-zinc-300">Carregando...</p>
+            </div>
+          </main>
+        </div>
+      }
+    >
+      <MenuPageContent />
+    </Suspense>
   );
 }
