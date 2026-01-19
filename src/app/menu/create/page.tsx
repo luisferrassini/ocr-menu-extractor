@@ -431,7 +431,7 @@ export default function MenuCreatePage() {
       setShowSaveDialog(false);
       setSaveMenuName("");
       setError(null);
-      router.push(`/menu/${selectedMenuId}`);
+      router.push(`/menu/?id=${selectedMenuId}`);
     } else {
       // Cria novo cardápio
       const id = saveMenuVersion(saveMenuName.trim(), menuItems, pricingRules);
@@ -440,7 +440,7 @@ export default function MenuCreatePage() {
       setSaveMenuName("");
       setSelectedMenuId(id);
       setError(null);
-      router.push(`/menu/${id}`);
+      router.push(`/menu/?id=${id}`);
     }
   }, [saveMenuName, menuItems, pricingRules, selectedMenuId, router]);
 
